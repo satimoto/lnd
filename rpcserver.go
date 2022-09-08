@@ -31,6 +31,7 @@ import (
 	"github.com/btcsuite/btcwallet/wallet/txauthor"
 	"github.com/davecgh/go-spew/spew"
 	proxy "github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
+	"github.com/lightningnetwork/lnd/aliasmgr"
 	"github.com/lightningnetwork/lnd/autopilot"
 	"github.com/lightningnetwork/lnd/build"
 	"github.com/lightningnetwork/lnd/chainreg"
@@ -2074,6 +2075,15 @@ func (r *rpcServer) parseOpenChannelReq(in *lnrpc.OpenChannelRequest,
 			in.CommitmentType)
 	}
 
+	// Check the Scid is an alias ShortChannelID
+	var scidAlias *lnwire.ShortChannelID
+	scid := lnwire.NewShortChanIDFromInt(in.Scid)
+
+	if aliasmgr.IsAlias(scid) {
+		scidAlias = new(lnwire.ShortChannelID)
+		*scidAlias = scid
+	}
+
 	// Instruct the server to trigger the necessary events to attempt to
 	// open a new channel. A stream is returned in place, this stream will
 	// be used to consume updates of the state of the pending channel.
@@ -2092,6 +2102,7 @@ func (r *rpcServer) parseOpenChannelReq(in *lnrpc.OpenChannelRequest,
 		MaxHtlcs:         maxHtlcs,
 		MaxLocalCsv:      uint16(in.MaxLocalCsv),
 		ChannelType:      channelType,
+		ScidAlias:        scidAlias,
 	}, nil
 }
 
@@ -7733,6 +7744,25 @@ func (r *rpcServer) SubscribeCustomMessages(req *lnrpc.SubscribeCustomMessagesRe
 			}
 		}
 	}
+}
+
+// AllocateAlias returns a new ALIAS ShortChannelID to the caller by allocating
+// the next un-allocated ShortChannelID.
+func (r *rpcServer) AllocateAlias(ctx context.Context,
+	in *lnrpc.AllocateAliasRequest) (*lnrpc.AllocateAliasResponse, error) {
+
+	// Request a new alias
+	alias, err := r.server.aliasMgr.RequestAlias()
+
+	if err != nil {
+		return nil, err
+	}
+
+	resp := &lnrpc.AllocateAliasResponse{
+		Scid: alias.ToUint64(),
+	}
+
+	return resp, nil
 }
 
 // ListAliases returns the set of all aliases we have ever allocated along with

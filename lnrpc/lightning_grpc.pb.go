@@ -410,6 +410,10 @@ type LightningClient interface {
 	//SubscribeCustomMessages subscribes to a stream of incoming custom peer
 	//messages.
 	SubscribeCustomMessages(ctx context.Context, in *SubscribeCustomMessagesRequest, opts ...grpc.CallOption) (Lightning_SubscribeCustomMessagesClient, error)
+	//
+	//AllocateAlias returns a new ALIAS ShortChannelID to the caller by allocating
+	//the next un-allocated ShortChannelID.
+	AllocateAlias(ctx context.Context, in *AllocateAliasRequest, opts ...grpc.CallOption) (*AllocateAliasResponse, error)
 	// lncli: `listaliases`
 	//ListAliases returns the set of all aliases that have ever existed with
 	//their confirmed SCID (if it exists) and/or the base SCID (in the case of
@@ -1307,6 +1311,15 @@ func (x *lightningSubscribeCustomMessagesClient) Recv() (*CustomMessage, error) 
 	return m, nil
 }
 
+func (c *lightningClient) AllocateAlias(ctx context.Context, in *AllocateAliasRequest, opts ...grpc.CallOption) (*AllocateAliasResponse, error) {
+	out := new(AllocateAliasResponse)
+	err := c.cc.Invoke(ctx, "/lnrpc.Lightning/AllocateAlias", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *lightningClient) ListAliases(ctx context.Context, in *ListAliasesRequest, opts ...grpc.CallOption) (*ListAliasesResponse, error) {
 	out := new(ListAliasesResponse)
 	err := c.cc.Invoke(ctx, "/lnrpc.Lightning/ListAliases", in, out, opts...)
@@ -1712,6 +1725,10 @@ type LightningServer interface {
 	//SubscribeCustomMessages subscribes to a stream of incoming custom peer
 	//messages.
 	SubscribeCustomMessages(*SubscribeCustomMessagesRequest, Lightning_SubscribeCustomMessagesServer) error
+	//
+	//AllocateAlias returns a new ALIAS ShortChannelID to the caller by allocating
+	//the next un-allocated ShortChannelID.
+	AllocateAlias(context.Context, *AllocateAliasRequest) (*AllocateAliasResponse, error)
 	// lncli: `listaliases`
 	//ListAliases returns the set of all aliases that have ever existed with
 	//their confirmed SCID (if it exists) and/or the base SCID (in the case of
@@ -1918,6 +1935,9 @@ func (UnimplementedLightningServer) SendCustomMessage(context.Context, *SendCust
 }
 func (UnimplementedLightningServer) SubscribeCustomMessages(*SubscribeCustomMessagesRequest, Lightning_SubscribeCustomMessagesServer) error {
 	return status.Errorf(codes.Unimplemented, "method SubscribeCustomMessages not implemented")
+}
+func (UnimplementedLightningServer) AllocateAlias(context.Context, *AllocateAliasRequest) (*AllocateAliasResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method AllocateAlias not implemented")
 }
 func (UnimplementedLightningServer) ListAliases(context.Context, *ListAliasesRequest) (*ListAliasesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListAliases not implemented")
@@ -3164,6 +3184,24 @@ func (x *lightningSubscribeCustomMessagesServer) Send(m *CustomMessage) error {
 	return x.ServerStream.SendMsg(m)
 }
 
+func _Lightning_AllocateAlias_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AllocateAliasRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(LightningServer).AllocateAlias(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/lnrpc.Lightning/AllocateAlias",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(LightningServer).AllocateAlias(ctx, req.(*AllocateAliasRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Lightning_ListAliases_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListAliasesRequest)
 	if err := dec(in); err != nil {
@@ -3396,6 +3434,10 @@ var Lightning_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SendCustomMessage",
 			Handler:    _Lightning_SendCustomMessage_Handler,
+		},
+		{
+			MethodName: "AllocateAlias",
+			Handler:    _Lightning_AllocateAlias_Handler,
 		},
 		{
 			MethodName: "ListAliases",

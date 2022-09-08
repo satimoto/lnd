@@ -2992,6 +2992,15 @@
         }
       }
     },
+    "lnrpcAllocateAliasResponse": {
+      "type": "object",
+      "properties": {
+        "scid": {
+          "type": "string",
+          "format": "uint64"
+        }
+      }
+    },
     "lnrpcAmount": {
       "type": "object",
       "properties": {
@@ -5525,6 +5534,11 @@
         "scid_alias": {
           "type": "boolean",
           "description": "If this is true, then an option-scid-alias channel-type open will be\nattempted."
+        },
+        "scid": {
+          "type": "string",
+          "format": "uint64",
+          "description": "If this is set, then this ALIAS ShortChannelID will be used instead of\nallocating the next un-allocated ShortChannelID."
         }
       }
     },

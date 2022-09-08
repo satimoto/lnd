@@ -249,6 +249,11 @@ type InitFundingMsg struct {
 	// support explicit channel type negotiation.
 	ChannelType *lnwire.ChannelType
 
+	// ScidAlias is an optional ShortChannelID used by the channel until 
+	// it is confirmed. Otherwise the alias ShortChannelID will be allocated 
+	// using the next un-allocated ShortChannelID
+	ScidAlias *lnwire.ShortChannelID
+
 	// Updates is a channel which updates to the opening status of the channel
 	// are sent on.
 	Updates chan *lnrpc.OpenStatusUpdate
@@ -3941,10 +3946,17 @@ func (f *Manager) handleInitFundingMsg(msg *InitFundingMsg) {
 	if zeroConf {
 		// Store the alias for zero-conf channels in the underlying
 		// partial channel state.
-		aliasScid, err := f.cfg.AliasManager.RequestAlias()
-		if err != nil {
-			msg.Err <- err
-			return
+		var aliasScid lnwire.ShortChannelID
+		if msg.ScidAlias != nil {
+			// Use the alias ShortChannelID from the InitFundingMsg
+			aliasScid = *msg.ScidAlias
+		} else {
+			// Request the next allocated alias ShortChannelID
+			aliasScid, err = f.cfg.AliasManager.RequestAlias()
+			if err != nil {
+				msg.Err <- err
+				return
+			}
 		}
 
 		reservation.AddAlias(aliasScid)
