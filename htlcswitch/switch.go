@@ -2329,16 +2329,19 @@ func (s *Switch) addLiveLink(link ChannelLink) {
 
 	aliases := link.getAliases()
 	if link.isZeroConf() {
+		log.Infof("Link is zero-conf")
 		if link.zeroConfConfirmed() {
 			// Since the zero-conf channel has confirmed, we can
 			// populate the aliasToReal mapping.
 			confirmedScid := link.confirmedScid()
 
 			for _, alias := range aliases {
+				log.Infof("Add alias to real alias=%v, confirmed_scid=%v", alias, confirmedScid)
 				s.aliasToReal[alias] = confirmedScid
 			}
 
 			// Add the confirmed SCID as a key in the baseIndex.
+			log.Infof("Add confirmed to base index confirmed_scid=%v, link_scid=%v", confirmedScid, linkScid)
 			s.baseIndex[confirmedScid] = linkScid
 		}
 
@@ -2348,18 +2351,23 @@ func (s *Switch) addLiveLink(link ChannelLink) {
 		// special-case it like the option-scid-alias feature-bit case
 		// further down.
 		for _, alias := range aliases {
+			log.Infof("Add to base index alias=%v, link_scid=%v", alias, linkScid)
 			s.baseIndex[alias] = linkScid
 		}
 	} else if link.negotiatedAliasFeature() {
+		log.Infof("Link is scid-alias")
 		// The link's SCID is the confirmed SCID for non-zero-conf
 		// option-scid-alias feature bit channels.
 		for _, alias := range aliases {
+			log.Infof("Add alias to real alias=%v, link_scid=%v", alias, linkScid)
+			log.Infof("Add to base index alias=%v, link_scid=%v", alias, linkScid)
 			s.aliasToReal[alias] = linkScid
 			s.baseIndex[alias] = linkScid
 		}
 
 		// Since the link's SCID is confirmed, it was not included in
 		// the baseIndex above as a key. Add it now.
+		log.Infof("Add to base index link_scid=%v", linkScid)
 		s.baseIndex[linkScid] = linkScid
 	}
 }
@@ -2448,6 +2456,8 @@ func (s *Switch) getLinkByMapping(pkt *htlcPacket) (ChannelLink, error) {
 	chanID := pkt.outgoingChanID
 	aliasID := s.cfg.IsAlias(chanID)
 
+	log.Infof("Getting link chan_id=%v, is_alias=%v", chanID, aliasID)
+
 	// Set the originalOutgoingChanID so the proper channel_update can be
 	// sent back if the option-scid-alias feature bit was negotiated.
 	pkt.originalOutgoingChanID = chanID
@@ -2458,6 +2468,7 @@ func (s *Switch) getLinkByMapping(pkt *htlcPacket) (ChannelLink, error) {
 		baseScid, ok := s.baseIndex[chanID]
 		if !ok {
 			// No mapping exists, bail.
+			log.Infof("No base index found chan_id=%v", chanID)
 			return nil, ErrChannelLinkNotFound
 		}
 
@@ -2466,6 +2477,7 @@ func (s *Switch) getLinkByMapping(pkt *htlcPacket) (ChannelLink, error) {
 		link, ok := s.forwardingIndex[baseScid]
 		if !ok {
 			// Link not found, bail.
+			log.Infof("No forwarding index found base_scid=%v", baseScid)
 			return nil, ErrChannelLinkNotFound
 		}
 
