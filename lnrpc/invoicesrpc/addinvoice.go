@@ -504,6 +504,9 @@ func chanCanBeHopHint(channel *HopHintInfo, cfg *SelectHopHintsCfg) (
 	// channels.
 	var remotePub [33]byte
 	copy(remotePub[:], channel.RemotePubkey.SerializeCompressed())
+	// Comment out this check as an intermittent mobile node 
+	// may have pruned the LSP node
+	/*
 	isRemoteNodePublic, err := cfg.IsPublicNode(remotePub)
 	if err != nil {
 		log.Errorf("Unable to determine if node %x "+
@@ -517,6 +520,7 @@ func chanCanBeHopHint(channel *HopHintInfo, cfg *SelectHopHintsCfg) (
 			channel.ShortChannelID, remotePub)
 		return nil, false
 	}
+	*/
 
 	// Fetch the policies for each end of the channel.
 	info, p1, p2, err := cfg.FetchChannelEdgesByID(channel.ShortChannelID)
