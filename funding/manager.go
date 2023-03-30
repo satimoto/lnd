@@ -281,10 +281,9 @@ type InitFundingMsg struct {
 	// funding negotiation. This type will only be observed if BOTH sides
 	// support explicit channel type negotiation.
 	ChannelType *lnwire.ChannelType
-	ChannelType *lnwire.ChannelType
 
-	// ScidAlias is an optional ShortChannelID used by the channel until 
-	// it is confirmed. Otherwise the alias ShortChannelID will be allocated 
+	// ScidAlias is an optional ShortChannelID used by the channel until
+	// it is confirmed. Otherwise the alias ShortChannelID will be allocated
 	// using the next un-allocated ShortChannelID
 	ScidAlias *lnwire.ShortChannelID
 
@@ -4110,6 +4109,7 @@ func (f *Manager) handleInitFundingMsg(msg *InitFundingMsg) {
 				msg.Err <- err
 				return
 			}
+		}
 
 		reservation.AddAlias(aliasScid)
 	}
