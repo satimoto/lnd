@@ -70,6 +70,8 @@ type RouterClient interface {
 	// probability if no channel is available or if the amount violates min/max
 	// HTLC constraints.
 	QueryProbability(ctx context.Context, in *QueryProbabilityRequest, opts ...grpc.CallOption) (*QueryProbabilityResponse, error)
+	// MarkEdgeLive clears an edge from our zombie index, deeming it as live.
+	MarkEdgeLive(ctx context.Context, in *MarkEdgeLiveRequest, opts ...grpc.CallOption) (*MarkEdgeLiveResponse, error)
 	// BuildRoute builds a fully specified route based on a list of hop public
 	// keys. It retrieves the relevant channel policies from the graph in order to
 	// calculate the correct fees and time locks.
@@ -288,6 +290,15 @@ func (c *routerClient) QueryProbability(ctx context.Context, in *QueryProbabilit
 	return out, nil
 }
 
+func (c *routerClient) MarkEdgeLive(ctx context.Context, in *MarkEdgeLiveRequest, opts ...grpc.CallOption) (*MarkEdgeLiveResponse, error) {
+	out := new(MarkEdgeLiveResponse)
+	err := c.cc.Invoke(ctx, "/routerrpc.Router/MarkEdgeLive", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *routerClient) BuildRoute(ctx context.Context, in *BuildRouteRequest, opts ...grpc.CallOption) (*BuildRouteResponse, error) {
 	out := new(BuildRouteResponse)
 	err := c.cc.Invoke(ctx, "/routerrpc.Router/BuildRoute", in, out, opts...)
@@ -490,6 +501,8 @@ type RouterServer interface {
 	// probability if no channel is available or if the amount violates min/max
 	// HTLC constraints.
 	QueryProbability(context.Context, *QueryProbabilityRequest) (*QueryProbabilityResponse, error)
+	// MarkEdgeLive clears an edge from our zombie index, deeming it as live.
+	MarkEdgeLive(context.Context, *MarkEdgeLiveRequest) (*MarkEdgeLiveResponse, error)
 	// BuildRoute builds a fully specified route based on a list of hop public
 	// keys. It retrieves the relevant channel policies from the graph in order to
 	// calculate the correct fees and time locks.
@@ -562,6 +575,9 @@ func (UnimplementedRouterServer) SetMissionControlConfig(context.Context, *SetMi
 }
 func (UnimplementedRouterServer) QueryProbability(context.Context, *QueryProbabilityRequest) (*QueryProbabilityResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method QueryProbability not implemented")
+}
+func (UnimplementedRouterServer) MarkEdgeLive(context.Context, *MarkEdgeLiveRequest) (*MarkEdgeLiveResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method MarkEdgeLive not implemented")
 }
 func (UnimplementedRouterServer) BuildRoute(context.Context, *BuildRouteRequest) (*BuildRouteResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method BuildRoute not implemented")
@@ -819,6 +835,24 @@ func _Router_QueryProbability_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Router_MarkEdgeLive_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MarkEdgeLiveRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RouterServer).MarkEdgeLive(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/routerrpc.Router/MarkEdgeLive",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RouterServer).MarkEdgeLive(ctx, req.(*MarkEdgeLiveRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Router_BuildRoute_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(BuildRouteRequest)
 	if err := dec(in); err != nil {
@@ -986,6 +1020,10 @@ var Router_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "QueryProbability",
 			Handler:    _Router_QueryProbability_Handler,
+		},
+		{
+			MethodName: "MarkEdgeLive",
+			Handler:    _Router_MarkEdgeLive_Handler,
 		},
 		{
 			MethodName: "BuildRoute",

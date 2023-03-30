@@ -104,6 +104,10 @@ var (
 			Entity: "offchain",
 			Action: "write",
 		}},
+		"/routerrpc.Router/MarkEdgeLive": {{
+			Entity: "offchain",
+			Action: "read",
+		}},
 		"/routerrpc.Router/BuildRoute": {{
 			Entity: "offchain",
 			Action: "read",
@@ -909,6 +913,17 @@ func (s *Server) trackPaymentStream(context context.Context,
 			return context.Err()
 		}
 	}
+}
+
+// MarkEdgeLive clears an edge from our zombie index, deeming it as live.
+func (s *Server) MarkEdgeLive(ctx context.Context,
+	req *MarkEdgeLiveRequest) (*MarkEdgeLiveResponse, error) {
+
+	for _, channelId := range req.ChannelIds {
+		s.cfg.Router.MarkEdgeLive(lnwire.NewShortChanIDFromInt(channelId))
+	}
+
+	return &MarkEdgeLiveResponse{}, nil
 }
 
 // BuildRoute builds a route from a list of hop addresses.

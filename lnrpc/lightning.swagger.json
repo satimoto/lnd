@@ -3207,6 +3207,15 @@
         }
       }
     },
+    "lnrpcAllocateAliasResponse": {
+      "type": "object",
+      "properties": {
+        "scid": {
+          "type": "string",
+          "format": "uint64"
+        }
+      }
+    },
     "lnrpcAmount": {
       "type": "object",
       "properties": {
@@ -5811,6 +5820,11 @@
           "type": "string",
           "format": "uint64",
           "description": "The number of satoshis we require the remote peer to reserve. This value,\nif specified, must be above the dust limit and below 20% of the channel\ncapacity."
+        },
+        "scid": {
+          "type": "string",
+          "format": "uint64",
+          "description": "If this is set, then this ALIAS ShortChannelID will be used instead of\nallocating the next un-allocated ShortChannelID."
         }
       }
     },
