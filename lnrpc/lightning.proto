@@ -1548,6 +1548,9 @@ message Channel {
 
     // The configured alias name of our peer.
     string peer_alias = 34;
+
+    // This is the peer SCID alias.
+    uint64 peer_scid_alias = 35 [jstype = JS_STRING];
 }
 
 message ListChannelsRequest {
@@ -2278,10 +2281,17 @@ message OpenChannelRequest {
     uint64 remote_chan_reserve_sat = 25;
 
     /*
+    If set, then lnd will attempt to commit all the coins under control of the
+    internal wallet to open the channel, and the LocalFundingAmount field must
+    be zero and is ignored.
+    */
+    bool fund_max = 26;
+
+    /*
     If this is set, then this ALIAS ShortChannelID will be used instead of
     allocating the next un-allocated ShortChannelID.
     */
-    uint64 scid = 26;
+    uint64 scid = 27;
 }
 message OpenStatusUpdate {
     oneof update {

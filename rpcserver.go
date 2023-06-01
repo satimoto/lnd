@@ -1939,6 +1939,62 @@ func (r *rpcServer) parseOpenChannelReq(in *lnrpc.OpenChannelRequest,
 
 	localFundingAmt := btcutil.Amount(in.LocalFundingAmount)
 	remoteInitialBalance := btcutil.Amount(in.PushSat)
+
+	// If we are not committing the maximum viable balance towards a channel
+	// then the local funding amount must be specified. In case FundMax is
+	// set the funding amount is specified as the interval between minimum
+	// funding amount and by the configured maximum channel size.
+	if !in.FundMax && localFundingAmt == 0 {
+		return nil, fmt.Errorf("local funding amount must be non-zero")
+	}
+
+	// Ensure that the initial balance of the remote party (if pushing
+	// satoshis) does not exceed the amount the local party has requested
+	// for funding. This is only checked if we are not committing the
+	// maximum viable amount towards the channel balance. If we do commit
+	// the maximum then the remote balance is checked in a dedicated FundMax
+	// check.
+	if !in.FundMax && remoteInitialBalance >= localFundingAmt {
+		return nil, fmt.Errorf("amount pushed to remote peer for " +
+			"initial state must be below the local funding amount")
+	}
+
+	// We either allow the fundmax or the psbt flow hence we return an error
+	// if both are set.
+	if in.FundingShim != nil && in.FundMax {
+		return nil, fmt.Errorf("cannot provide a psbt funding shim " +
+			"while committing the maxium wallet balance towards " +
+			"the channel opening")
+	}
+
+	// If the FundMax flag is set, ensure that the acceptable minimum local
+	// amount adheres to the amount to be pushed to the remote, and to
+	// current rules, while also respecting the settings for the maximum
+	// channel size.
+	var minFundAmt, fundUpToMaxAmt btcutil.Amount
+	if in.FundMax {
+		// We assume the configured maximum channel size to be the upper
+		// bound of our "maxed" out funding attempt.
+		fundUpToMaxAmt = btcutil.Amount(r.cfg.MaxChanSize)
+
+		// Since the standard non-fundmax flow requires the minimum
+		// funding amount to be at least in the amount of the initial
+		// remote balance(push amount) we need to adjust the minimum
+		// funding amount accordingly. We initially assume the minimum
+		// allowed channel size as minimum funding amount.
+		minFundAmt = funding.MinChanFundingSize
+
+		// If minFundAmt is less than the initial remote balance we
+		// simply assign the initial remote balance to minFundAmt in
+		// order to fullfil the criterion. Whether or not this so
+		// determined minimum amount is actually available is
+		// ascertained downstream in the lnwallet's reservation
+		// workflow.
+		if remoteInitialBalance >= minFundAmt {
+			minFundAmt = remoteInitialBalance
+		}
+	}
+
 	minHtlcIn := lnwire.MilliSatoshi(in.MinHtlcMsat)
 	remoteCsvDelay := uint16(in.RemoteCsvDelay)
 	maxValue := lnwire.MilliSatoshi(in.RemoteMaxValueInFlightMsat)
@@ -1946,20 +2002,6 @@ func (r *rpcServer) parseOpenChannelReq(in *lnrpc.OpenChannelRequest,
 	remoteChanReserve := btcutil.Amount(in.RemoteChanReserveSat)
 
 	globalFeatureSet := r.server.featureMgr.Get(feature.SetNodeAnn)
-
-	// Ensure that a local funding amount has been specified.
-	if localFundingAmt == 0 {
-		return nil, fmt.Errorf("local funding amount must be non-zero")
-	}
-
-	// Ensure that the initial balance of the remote party (if pushing
-	// satoshis) does not exceed the amount the local party has requested
-	// for funding.
-	//
-	if remoteInitialBalance >= localFundingAmt {
-		return nil, fmt.Errorf("amount pushed to remote peer for " +
-			"initial state must be below the local funding amount")
-	}
 
 	// Determine if the user provided channel fees
 	// and if so pass them on to the funding workflow.
@@ -1973,7 +2015,7 @@ func (r *rpcServer) parseOpenChannelReq(in *lnrpc.OpenChannelRequest,
 
 	// Ensure that the remote channel reserve does not exceed 20% of the
 	// channel capacity.
-	if remoteChanReserve >= localFundingAmt/5 {
+	if !in.FundMax && remoteChanReserve >= localFundingAmt/5 {
 		return nil, fmt.Errorf("remote channel reserve must be less " +
 			"than the %%20 of the channel capacity")
 	}
@@ -1981,18 +2023,25 @@ func (r *rpcServer) parseOpenChannelReq(in *lnrpc.OpenChannelRequest,
 	// Ensure that the user doesn't exceed the current soft-limit for
 	// channel size. If the funding amount is above the soft-limit, then
 	// we'll reject the request.
+	// If the FundMax flag is set the local amount is determined downstream
+	// in the wallet hence we do not check it here against the maximum
+	// funding amount. Only if the localFundingAmt is specified we can check
+	// if it exceeds the maximum funding amount.
 	wumboEnabled := globalFeatureSet.HasFeature(
 		lnwire.WumboChannelsOptional,
 	)
-	if !wumboEnabled && localFundingAmt > MaxFundingAmount {
+	if !in.FundMax && !wumboEnabled && localFundingAmt > MaxFundingAmount {
 		return nil, fmt.Errorf("funding amount is too large, the max "+
 			"channel size is: %v", MaxFundingAmount)
 	}
 
 	// Restrict the size of the channel we'll actually open. At a later
-	// level, we'll ensure that the output we create after accounting for
-	// fees that a dust output isn't created.
-	if localFundingAmt < funding.MinChanFundingSize {
+	// level, we'll ensure that the output we create, after accounting for
+	// fees, does not leave a dust output. In case of the FundMax flow
+	// dedicated checks ensure that the lower boundary of the channel size
+	// is at least in the amount of MinChanFundingSize or potentially higher
+	// if a remote balance is specified.
+	if !in.FundMax && localFundingAmt < funding.MinChanFundingSize {
 		return nil, fmt.Errorf("channel is too small, the minimum "+
 			"channel size is: %v SAT", int64(funding.MinChanFundingSize))
 	}
@@ -2142,12 +2191,14 @@ func (r *rpcServer) parseOpenChannelReq(in *lnrpc.OpenChannelRequest,
 	// open a new channel. A stream is returned in place, this stream will
 	// be used to consume updates of the state of the pending channel.
 	return &funding.InitFundingMsg{
-		TargetPubkey:      nodePubKey,
-		ChainHash:         *r.cfg.ActiveNetParams.GenesisHash,
-		LocalFundingAmt:   localFundingAmt,
-		BaseFee:           channelBaseFee,
-		FeeRate:           channelFeeRate,
-		PushAmt:           lnwire.NewMSatFromSatoshis(remoteInitialBalance),
+		TargetPubkey:    nodePubKey,
+		ChainHash:       *r.cfg.ActiveNetParams.GenesisHash,
+		LocalFundingAmt: localFundingAmt,
+		BaseFee:         channelBaseFee,
+		FeeRate:         channelFeeRate,
+		PushAmt: lnwire.NewMSatFromSatoshis(
+			remoteInitialBalance,
+		),
 		MinHtlcIn:         minHtlcIn,
 		FundingFeePerKw:   feeRate,
 		Private:           in.Private,
@@ -2159,6 +2210,8 @@ func (r *rpcServer) parseOpenChannelReq(in *lnrpc.OpenChannelRequest,
 		MaxHtlcs:          maxHtlcs,
 		MaxLocalCsv:       uint16(in.MaxLocalCsv),
 		ChannelType:       channelType,
+		FundUpToMaxAmt:    fundUpToMaxAmt,
+		MinFundAmt:        minFundAmt,
 		ScidAlias:         scidAlias,		
 	}, nil
 }
@@ -2956,8 +3009,6 @@ func (r *rpcServer) GetRecoveryInfo(ctx context.Context,
 func (r *rpcServer) ListPeers(ctx context.Context,
 	in *lnrpc.ListPeersRequest) (*lnrpc.ListPeersResponse, error) {
 
-	rpcsLog.Tracef("[listpeers] request")
-
 	serverPeers := r.server.Peers()
 	resp := &lnrpc.ListPeersResponse{
 		Peers: make([]*lnrpc.Peer, 0, len(serverPeers)),
@@ -3716,8 +3767,6 @@ func (r *rpcServer) PendingChannels(ctx context.Context,
 	in *lnrpc.PendingChannelsRequest) (
 	*lnrpc.PendingChannelsResponse, error) {
 
-	rpcsLog.Debugf("[pendingchannels]")
-
 	resp := &lnrpc.PendingChannelsResponse{}
 
 	// First, we find all the channels that will soon be opened.
@@ -4116,6 +4165,7 @@ func createRPCOpenChannel(r *rpcServer, dbChannel *channeldb.OpenChannel,
 	nodePub := dbChannel.IdentityPub
 	nodeID := hex.EncodeToString(nodePub.SerializeCompressed())
 	chanPoint := dbChannel.FundingOutpoint
+	chanID := lnwire.NewChanIDFromOutPoint(&chanPoint)
 
 	// As this is required for display purposes, we'll calculate
 	// the weight of the commitment transaction. We also add on the
@@ -4151,6 +4201,10 @@ func createRPCOpenChannel(r *rpcServer, dbChannel *channeldb.OpenChannel,
 	// Fetch the set of aliases for the channel.
 	channelAliases := r.server.aliasMgr.GetAliases(dbScid)
 
+	// Fetch the peer alias. If one does not exist, errNoPeerAlias
+	// is returned and peerScidAlias will be an empty ShortChannelID.
+	peerScidAlias, _ := r.server.aliasMgr.GetPeerAlias(chanID)
+
 	channel := &lnrpc.Channel{
 		Active:                isActive,
 		Private:               isPrivate(dbChannel),
@@ -4179,6 +4233,7 @@ func createRPCOpenChannel(r *rpcServer, dbChannel *channeldb.OpenChannel,
 			&dbChannel.RemoteChanCfg,
 		),
 		AliasScids:            make([]uint64, 0, len(channelAliases)),
+		PeerScidAlias:         peerScidAlias.ToUint64(),
 		ZeroConf:              dbChannel.IsZeroConf(),
 		ZeroConfConfirmedScid: dbChannel.ZeroConfRealScid().ToUint64(),
 		// TODO: remove the following deprecated fields
@@ -6424,8 +6479,6 @@ func marshallTopologyChange(topChange *routing.TopologyChange) *lnrpc.GraphTopol
 func (r *rpcServer) ListPayments(ctx context.Context,
 	req *lnrpc.ListPaymentsRequest) (*lnrpc.ListPaymentsResponse, error) {
 
-	rpcsLog.Debugf("[ListPayments]")
-
 	// If both dates are set, we check that the start date is less than the
 	// end date, otherwise we'll get an empty result.
 	if req.CreationDateStart != 0 && req.CreationDateEnd != 0 {
@@ -6642,10 +6695,6 @@ const feeBase float64 = 1000000
 func (r *rpcServer) FeeReport(ctx context.Context,
 	_ *lnrpc.FeeReportRequest) (*lnrpc.FeeReportResponse, error) {
 
-	// TODO(roasbeef): use UnaryInterceptor to add automated logging
-
-	rpcsLog.Debugf("[feereport]")
-
 	channelGraph := r.server.graphDB
 	selfNode, err := channelGraph.SourceNode()
 	if err != nil {
@@ -6852,6 +6901,10 @@ func (r *rpcServer) UpdateChannelPolicy(ctx context.Context,
 		return nil, fmt.Errorf("time lock delta of %v is too small, "+
 			"minimum supported is %v", req.TimeLockDelta,
 			minTimeLockDelta)
+	} else if req.TimeLockDelta > uint32(MaxTimeLockDelta) {
+		return nil, fmt.Errorf("time lock delta of %v is too big, "+
+			"maximum supported is %v", req.TimeLockDelta,
+			MaxTimeLockDelta)
 	}
 
 	baseFeeMsat := lnwire.MilliSatoshi(req.BaseFeeMsat)
@@ -6908,8 +6961,6 @@ func (r *rpcServer) UpdateChannelPolicy(ctx context.Context,
 func (r *rpcServer) ForwardingHistory(ctx context.Context,
 	req *lnrpc.ForwardingHistoryRequest) (*lnrpc.ForwardingHistoryResponse,
 	error) {
-
-	rpcsLog.Debugf("[forwardinghistory]")
 
 	// Before we perform the queries below, we'll instruct the switch to
 	// flush any pending events to disk. This ensure we get a complete
@@ -7441,8 +7492,6 @@ func (r *rpcServer) ChannelAcceptor(stream lnrpc.Lightning_ChannelAcceptorServer
 func (r *rpcServer) BakeMacaroon(ctx context.Context,
 	req *lnrpc.BakeMacaroonRequest) (*lnrpc.BakeMacaroonResponse, error) {
 
-	rpcsLog.Debugf("[bakemacaroon]")
-
 	// If the --no-macaroons flag is used to start lnd, the macaroon service
 	// is not initialized. Therefore we can't bake new macaroons.
 	if r.macService == nil {
@@ -7529,8 +7578,6 @@ func (r *rpcServer) ListMacaroonIDs(ctx context.Context,
 	req *lnrpc.ListMacaroonIDsRequest) (
 	*lnrpc.ListMacaroonIDsResponse, error) {
 
-	rpcsLog.Debugf("[listmacaroonids]")
-
 	// If the --no-macaroons flag is used to start lnd, the macaroon service
 	// is not initialized. Therefore we can't show any IDs.
 	if r.macService == nil {
@@ -7561,8 +7608,6 @@ func (r *rpcServer) DeleteMacaroonID(ctx context.Context,
 	req *lnrpc.DeleteMacaroonIDRequest) (
 	*lnrpc.DeleteMacaroonIDResponse, error) {
 
-	rpcsLog.Debugf("[deletemacaroonid]")
-
 	// If the --no-macaroons flag is used to start lnd, the macaroon service
 	// is not initialized. Therefore we can't delete any IDs.
 	if r.macService == nil {
@@ -7591,8 +7636,6 @@ func (r *rpcServer) DeleteMacaroonID(ctx context.Context,
 func (r *rpcServer) ListPermissions(_ context.Context,
 	_ *lnrpc.ListPermissionsRequest) (*lnrpc.ListPermissionsResponse,
 	error) {
-
-	rpcsLog.Debugf("[listpermissions]")
 
 	permissionMap := make(map[string]*lnrpc.MacaroonPermissionList)
 	for uri, perms := range r.interceptorChain.Permissions() {

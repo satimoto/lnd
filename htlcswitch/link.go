@@ -710,6 +710,9 @@ func (l *channelLink) syncChanStates() error {
 	// first message sent MUST be the ChanSync message.
 	select {
 	case msg := <-l.upstream:
+		l.log.Tracef("Received msg=%v from peer(%x)", msg.MsgType(),
+			l.cfg.Peer.PubKey())
+
 		remoteChanSyncMsg, ok := msg.(*lnwire.ChannelReestablish)
 		if !ok {
 			return fmt.Errorf("first message sent to sync "+
@@ -721,12 +724,12 @@ func (l *channelLink) syncChanStates() error {
 		// done any state updates yet, then we'll retransmit the
 		// funding locked message first. We do this, as at this point
 		// we can't be sure if they've really received the
-		// FundingLocked message.
+		// ChannelReady message.
 		if remoteChanSyncMsg.NextLocalCommitHeight == 1 &&
 			localChanSyncMsg.NextLocalCommitHeight == 1 &&
 			!l.channel.IsPending() {
 
-			l.log.Infof("resending FundingLocked message to peer")
+			l.log.Infof("resending ChannelReady message to peer")
 
 			nextRevocation, err := l.channel.NextRevocationKey()
 			if err != nil {
@@ -734,13 +737,13 @@ func (l *channelLink) syncChanStates() error {
 					"revocation: %v", err)
 			}
 
-			fundingLockedMsg := lnwire.NewFundingLocked(
+			channelReadyMsg := lnwire.NewChannelReady(
 				l.ChanID(), nextRevocation,
 			)
 
 			// For channels that negotiated the option-scid-alias
 			// feature bit, ensure that we send over the alias in
-			// the funding_locked message. We'll send the first
+			// the channel_ready message. We'll send the first
 			// alias we find for the channel since it does not
 			// matter which alias we send. We'll error out if no
 			// aliases are found.
@@ -756,13 +759,13 @@ func (l *channelLink) syncChanStates() error {
 				// getAliases returns a copy of the alias slice
 				// so it is ok to use a pointer to the first
 				// entry.
-				fundingLockedMsg.AliasScid = &aliases[0]
+				channelReadyMsg.AliasScid = &aliases[0]
 			}
 
-			err = l.cfg.Peer.SendMessage(false, fundingLockedMsg)
+			err = l.cfg.Peer.SendMessage(false, channelReadyMsg)
 			if err != nil {
 				return fmt.Errorf("unable to re-send "+
-					"FundingLocked: %v", err)
+					"ChannelReady: %v", err)
 			}
 		}
 
@@ -1033,8 +1036,8 @@ func (l *channelLink) htlcManager() {
 				// storing the transaction in the db.
 				l.fail(
 					LinkFailureError{
-						code:       ErrSyncError,
-						ForceClose: true,
+						code:          ErrSyncError,
+						FailureAction: LinkFailureForceClose, //nolint:lll
 					},
 					"unable to synchronize channel "+
 						"states: %v", err,
@@ -1074,8 +1077,8 @@ func (l *channelLink) htlcManager() {
 
 			l.fail(
 				LinkFailureError{
-					code:       ErrRecoveryError,
-					ForceClose: false,
+					code:          ErrRecoveryError,
+					FailureAction: LinkFailureForceNone,
 				},
 				"unable to synchronize channel "+
 					"states: %v", err,
@@ -1236,8 +1239,13 @@ func (l *channelLink) htlcManager() {
 			}
 
 		case <-l.cfg.PendingCommitTicker.Ticks():
-			l.fail(LinkFailureError{code: ErrRemoteUnresponsive},
-				"unable to complete dance")
+			l.fail(
+				LinkFailureError{
+					code:          ErrRemoteUnresponsive,
+					FailureAction: LinkFailureDisconnect,
+				},
+				"unable to complete dance",
+			)
 			return
 
 		// A message from the switch was just received. This indicates
@@ -1779,8 +1787,8 @@ func (l *channelLink) handleUpstreamMsg(msg lnwire.Message) {
 		if err := l.channel.ReceiveHTLCSettle(pre, idx); err != nil {
 			l.fail(
 				LinkFailureError{
-					code:       ErrInvalidUpdate,
-					ForceClose: true,
+					code:          ErrInvalidUpdate,
+					FailureAction: LinkFailureForceClose,
 				},
 				"unable to handle upstream settle HTLC: %v", err,
 			)
@@ -1944,9 +1952,9 @@ func (l *channelLink) handleUpstreamMsg(msg lnwire.Message) {
 			}
 			l.fail(
 				LinkFailureError{
-					code:       ErrInvalidCommitment,
-					ForceClose: true,
-					SendData:   sendData,
+					code:          ErrInvalidCommitment,
+					FailureAction: LinkFailureForceClose,
+					SendData:      sendData,
 				},
 				"ChannelPoint(%v): unable to accept new "+
 					"commitment: %v",
@@ -2551,17 +2559,8 @@ func (l *channelLink) CheckHtlcForward(payHash [32]byte,
 	policy := l.cfg.FwrdingPolicy
 	l.RUnlock()
 
-	// First check whether the outgoing htlc satisfies the channel policy.
-	err := l.canSendHtlc(
-		policy, payHash, amtToForward, outgoingTimeout, heightNow,
-		originalScid,
-	)
-	if err != nil {
-		return err
-	}
-
-	// Next, using the amount of the incoming HTLC, we'll calculate the
-	// expected fee this incoming HTLC must carry in order to satisfy the
+	// Using the amount of the incoming HTLC, we'll calculate the expected
+	// fee this incoming HTLC must carry in order to satisfy the
 	// constraints of the outgoing link.
 	expectedFee := ExpectedFee(policy, amtToForward)
 
@@ -2569,7 +2568,8 @@ func (l *channelLink) CheckHtlcForward(payHash [32]byte,
 	// this HTLC as it didn't provide a sufficient amount of fees, or the
 	// values have been tampered with, or the send used incorrect/dated
 	// information to construct the forwarding information for this hop. In
-	// any case, we'll cancel this HTLC.
+	// any case, we'll cancel this HTLC. We're checking for this case first
+	// to leak as little information as possible.
 	actualFee := incomingHtlcAmt - amtToForward
 	if incomingHtlcAmt < amtToForward || actualFee < expectedFee {
 		l.log.Warnf("outgoing htlc(%x) has insufficient fee: "+
@@ -2583,6 +2583,15 @@ func (l *channelLink) CheckHtlcForward(payHash [32]byte,
 		}
 		failure := l.createFailureWithUpdate(false, originalScid, cb)
 		return NewLinkError(failure)
+	}
+
+	// Check whether the outgoing htlc satisfies the channel policy.
+	err := l.canSendHtlc(
+		policy, payHash, amtToForward, outgoingTimeout, heightNow,
+		originalScid,
+	)
+	if err != nil {
+		return err
 	}
 
 	// Finally, we'll ensure that the time-lock on the outgoing HTLC meets

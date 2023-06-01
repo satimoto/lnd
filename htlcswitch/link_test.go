@@ -1684,8 +1684,8 @@ func TestChannelLinkSingleHopMessageOrdering(t *testing.T) {
 		{"alice", "bob", &lnwire.ChannelReestablish{}, false},
 		{"bob", "alice", &lnwire.ChannelReestablish{}, false},
 
-		{"alice", "bob", &lnwire.FundingLocked{}, false},
-		{"bob", "alice", &lnwire.FundingLocked{}, false},
+		{"alice", "bob", &lnwire.ChannelReady{}, false},
+		{"bob", "alice", &lnwire.ChannelReady{}, false},
 
 		{"alice", "bob", &lnwire.UpdateAddHTLC{}, false},
 		{"alice", "bob", &lnwire.CommitSig{}, false},
@@ -3303,8 +3303,8 @@ func TestChannelRetransmission(t *testing.T) {
 				{"alice", "bob", &lnwire.ChannelReestablish{}, false},
 				{"bob", "alice", &lnwire.ChannelReestablish{}, false},
 
-				{"alice", "bob", &lnwire.FundingLocked{}, false},
-				{"bob", "alice", &lnwire.FundingLocked{}, false},
+				{"alice", "bob", &lnwire.ChannelReady{}, false},
+				{"bob", "alice", &lnwire.ChannelReady{}, false},
 
 				// Send payment from Alice to Bob and intercept
 				// the last revocation message, in this case
@@ -3343,8 +3343,8 @@ func TestChannelRetransmission(t *testing.T) {
 				{"alice", "bob", &lnwire.ChannelReestablish{}, false},
 				{"bob", "alice", &lnwire.ChannelReestablish{}, false},
 
-				{"alice", "bob", &lnwire.FundingLocked{}, false},
-				{"bob", "alice", &lnwire.FundingLocked{}, false},
+				{"alice", "bob", &lnwire.ChannelReady{}, false},
+				{"bob", "alice", &lnwire.ChannelReady{}, false},
 
 				// Send payment from Alice to Bob and intercept
 				// the last revocation message, in this case
@@ -3385,8 +3385,8 @@ func TestChannelRetransmission(t *testing.T) {
 				{"alice", "bob", &lnwire.ChannelReestablish{}, false},
 				{"bob", "alice", &lnwire.ChannelReestablish{}, false},
 
-				{"alice", "bob", &lnwire.FundingLocked{}, false},
-				{"bob", "alice", &lnwire.FundingLocked{}, false},
+				{"alice", "bob", &lnwire.ChannelReady{}, false},
+				{"bob", "alice", &lnwire.ChannelReady{}, false},
 
 				// Attempt make a payment from Alice to Bob,
 				// which is intercepted, emulating the Bob
@@ -3399,8 +3399,8 @@ func TestChannelRetransmission(t *testing.T) {
 				{"alice", "bob", &lnwire.ChannelReestablish{}, false},
 				{"bob", "alice", &lnwire.ChannelReestablish{}, false},
 
-				{"alice", "bob", &lnwire.FundingLocked{}, false},
-				{"bob", "alice", &lnwire.FundingLocked{}, false},
+				{"alice", "bob", &lnwire.ChannelReady{}, false},
+				{"bob", "alice", &lnwire.ChannelReady{}, false},
 
 				// After Bob has notified Alice that he didn't
 				// receive updates Alice should re-send them.
@@ -3816,8 +3816,8 @@ func TestChannelLinkUpdateCommitFee(t *testing.T) {
 		{"alice", "bob", &lnwire.ChannelReestablish{}, false},
 		{"bob", "alice", &lnwire.ChannelReestablish{}, false},
 
-		{"alice", "bob", &lnwire.FundingLocked{}, false},
-		{"bob", "alice", &lnwire.FundingLocked{}, false},
+		{"alice", "bob", &lnwire.ChannelReady{}, false},
+		{"bob", "alice", &lnwire.ChannelReady{}, false},
 
 		// First fee update.
 		{"alice", "bob", &lnwire.UpdateFee{}, false},
@@ -5457,8 +5457,10 @@ func TestChannelLinkFail(t *testing.T) {
 		// If we expect the link to force close the channel in this
 		// case, check that it happens. If not, make sure it does not
 		// happen.
-		require.Equal(
-			t, test.shouldForceClose, linkErr.ForceClose, test.name,
+		isForceCloseErr := (linkErr.FailureAction ==
+			LinkFailureForceClose)
+		require.True(
+			t, test.shouldForceClose == isForceCloseErr, test.name,
 		)
 		require.Equal(
 			t, test.permanentFailure, linkErr.PermanentFailure,
@@ -5641,6 +5643,19 @@ func TestCheckHtlcForward(t *testing.T) {
 		if _, ok := result.WireMessage().(*lnwire.FailFeeInsufficient); !ok {
 			t.Fatalf("expected FailFeeInsufficient failure code")
 		}
+	})
+
+	// Test that insufficient fee error takes preference over insufficient
+	// channel balance.
+	t.Run("insufficient fee error preference", func(t *testing.T) {
+		t.Parallel()
+
+		result := link.CheckHtlcForward(
+			hash, 100005, 100000, 200,
+			150, 0, lnwire.ShortChannelID{},
+		)
+		_, ok := result.WireMessage().(*lnwire.FailFeeInsufficient)
+		require.True(t, ok, "expected FailFeeInsufficient failure code")
 	})
 
 	t.Run("expiry too soon", func(t *testing.T) {
@@ -6329,11 +6344,12 @@ func TestPendingCommitTicker(t *testing.T) {
 	// Assert that we get the expected link failure from Alice.
 	select {
 	case linkErr := <-linkErrs:
-		if linkErr.code != ErrRemoteUnresponsive {
-			t.Fatalf("error code mismatch, "+
-				"want: ErrRemoteUnresponsive, got: %v",
-				linkErr.code)
-		}
+		require.Equal(
+			t, linkErr.code, ErrRemoteUnresponsive,
+			fmt.Sprintf("error code mismatch, want: "+
+				"ErrRemoteUnresponsive, got: %v", linkErr.code),
+		)
+		require.Equal(t, linkErr.FailureAction, LinkFailureDisconnect)
 
 	case <-time.After(time.Second):
 		t.Fatalf("did not receive failure")
@@ -6510,7 +6526,7 @@ func TestPipelineSettle(t *testing.T) {
 	// ForceClose should be false.
 	select {
 	case linkErr := <-linkErrors:
-		require.False(t, linkErr.ForceClose)
+		require.False(t, linkErr.FailureAction == LinkFailureForceClose)
 	case <-forwardChan:
 		t.Fatal("packet was erroneously forwarded")
 	}
@@ -6546,7 +6562,7 @@ func TestPipelineSettle(t *testing.T) {
 	// ForceClose should be false.
 	select {
 	case linkErr := <-linkErrors:
-		require.False(t, linkErr.ForceClose)
+		require.False(t, linkErr.FailureAction == LinkFailureForceClose)
 	case <-forwardChan:
 		t.Fatal("packet was erroneously forwarded")
 	}
